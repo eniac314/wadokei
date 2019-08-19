@@ -1,0 +1,46 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+	<meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1.0, user-scalable=no">
+  
+  <script type="text/javascript" src="js/Main.js"></script>
+  </head>
+
+<body>
+  <script type="text/javascript">
+    
+    var app = Elm.Main.init();
+
+    // app.ports.loadCaptcha.subscribe(function() {
+    //   grecaptcha.render(
+    //     document.querySelector('div.g-recaptcha'),
+    //     {
+    //         sitekey: '6LcasjsUAAAAANR2oVHvjDYFpjLDuRsruD16Q_aF',
+    //         callback: function onSubmit(val) {
+    //         app.ports.captcha_port.send(val);
+    //         }
+    //     }
+    //   );  
+    // });
+    
+    // app.ports.toSearchEngine.subscribe(function(s){
+    //    worker.postMessage(s);
+    // });
+
+    app.ports.getGeoloc.subscribe(getLocation);
+
+    function getLocation() {
+      if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(app.ports.geoloc.send);
+      } else {
+        console.log("no geolocation");
+      } 
+    }
+    
+  </script>
+
+</body>
+
+</html>
+
