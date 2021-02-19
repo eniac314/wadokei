@@ -1,5 +1,6 @@
 port module Main exposing (Model, Msg(..), SunInfo, TimeInfo, clockface, computeTimeInfo, currentSekki, getSunInfo, init, main, sekki, subscriptions, sunInfoDecoder, timeToAngle, update, view)
 
+import Basics.Extra
 import Browser
 import Collage exposing (..)
 import Collage.Layout exposing (..)
@@ -14,6 +15,7 @@ import Element.Border as Border
 import Element.Events as Events
 import Element.Font as Font
 import Element.Input as Input
+import Html exposing (select)
 import Http exposing (..)
 import Iso8601 exposing (..)
 import Json.Decode as D
@@ -21,6 +23,7 @@ import Set exposing (..)
 import Task exposing (..)
 import Time exposing (..)
 import Time.Extra exposing (..)
+import TimeZone exposing (zones)
 
 
 port getGeoloc : () -> Cmd msg
@@ -153,7 +156,26 @@ update msg model =
                     )
 
                 Err e ->
-                    ( model, Cmd.none )
+                    let
+                        tokyoLat =
+                            35.689722
+
+                        tokyoLng =
+                            139.692222
+
+                        newModel =
+                            { model
+                                | latitude = tokyoLat
+                                , latitudeBuffer = String.fromFloat tokyoLat
+                                , longitude = tokyoLng
+                                , longitudeBuffer = String.fromFloat tokyoLng
+                            }
+                    in
+                    ( newModel
+                    , Maybe.map (getSunInfo newModel.latitude newModel.longitude)
+                        newModel.today
+                        |> Maybe.withDefault Cmd.none
+                    )
 
         IncHour ->
             ( { model | hourOffset = model.hourOffset + 1 }
@@ -168,7 +190,6 @@ update msg model =
         IncDay ->
             ( { model
                 | dayOffset = model.dayOffset + 1
-                , today = Maybe.map (Date.add Days 1) model.today
               }
             , Cmd.none
             )
@@ -176,7 +197,6 @@ update msg model =
         DecDay ->
             ( { model
                 | dayOffset = model.dayOffset - 1
-                , today = Maybe.map (Date.add Days -1) model.today
               }
             , Cmd.none
             )
@@ -184,7 +204,6 @@ update msg model =
         IncMonth ->
             ( { model
                 | monthOffset = model.monthOffset + 1
-                , today = Maybe.map (Date.add Months 1) model.today
               }
             , Cmd.none
             )
@@ -192,7 +211,6 @@ update msg model =
         DecMonth ->
             ( { model
                 | monthOffset = model.monthOffset - 1
-                , today = Maybe.map (Date.add Months -1) model.today
               }
             , Cmd.none
             )
@@ -214,9 +232,13 @@ update msg model =
             )
 
         ReloadSunInfo ->
-            case model.today of
-                Just date ->
-                    ( model, getSunInfo model.latitude model.longitude date )
+            case ( model.currentTime, model.zone ) of
+                ( Just time, Just zone ) ->
+                    let
+                        today =
+                            Date.fromPosix zone (correctedTime time model.today zone)
+                    in
+                    ( { model | today = Just today }, getSunInfo model.latitude model.longitude )
 
                 _ ->
                     ( model, Cmd.none )
@@ -280,7 +302,7 @@ timeInfoView model =
                     String.padLeft 2 '0' (String.fromInt (Time.toSecond zone t))
 
                 ti =
-                    computeTimeInfo zone time sunrise sunset 0
+                    computeTimeInfo zone (correctedTime time model.today zone) sunrise sunset 0
 
                 milliToStr v =
                     let
@@ -298,6 +320,7 @@ timeInfoView model =
             column
                 [ spacing 15
                 , padding 20
+                , Element.width (px 800)
                 ]
                 [ row
                     [ spacing 10 ]
@@ -326,6 +349,63 @@ timeInfoView model =
                     [ text "Sunset:"
                     , Element.text <| hour sunset ++ ":" ++ minute sunset
                     ]
+                , row
+                    [ spacing 10 ]
+                    [ text "temporalHour: "
+                    , Element.text <| String.fromFloat ti.temporalTime.temporalHour
+                    ]
+                , row
+                    [ spacing 10 ]
+                    [ text "temporalMinute: "
+                    , Element.text <| String.fromFloat ti.temporalTime.temporalMinute
+                    ]
+                , row
+                    [ spacing 10 ]
+                    [ text "temporalSecond: "
+                    , Element.text <| String.fromFloat ti.temporalTime.temporalSecond
+                    ]
+
+                --, row
+                --    [ spacing 10 ]
+                --    [ text "Hour hand pos (pos on trig circle in radians):"
+                --    , Element.text <| String.fromFloat ti.hourHandPos
+                --    ]
+                --, row
+                --    [ spacing 10 ]
+                --    [ text "Minute hand pos (pos on trig circle in radians):"
+                --    , Element.text <| String.fromFloat ti.minuteHandPos
+                --    ]
+                --, row
+                --    [ spacing 10 ]
+                --    [ text "Minute hand pos (pos on trig circle in radians):"
+                --    , Element.text <| String.fromFloat ti.minuteHandPos
+                --    ]
+                --, row
+                --    [ spacing 10 ]
+                --    [ text <|
+                --        "Is day:"
+                --            ++ (let
+                --                    alphaDiff a b =
+                --                        if a > b then
+                --                            a - b
+                --                        else
+                --                            b - a
+                --                    d1 =
+                --                        alphaDiff ti.sunrisePos ti.sunsetPos
+                --                    d2 =
+                --                        alphaDiff ti.sunrisePos ti.hourHandPos + alphaDiff ti.sunsetPos ti.hourHandPos
+                --                in
+                --                if
+                --                    if ti.dayHourLength > ti.nightHourLength then
+                --                        d2 > d1
+                --                    else
+                --                        d2 <= d1
+                --                then
+                --                    " yes"
+                --                else
+                --                    " no"
+                --               )
+                --    ]
                 ]
 
         _ ->
@@ -453,7 +533,7 @@ clockface model =
         ( Just zone, ( Just time, Just today ), Just { sunrise, sunset } ) ->
             let
                 ti =
-                    computeTimeInfo zone time sunrise sunset 0
+                    computeTimeInfo zone (correctedTime time model.today zone) sunrise sunset 0
 
                 outerRim =
                     circle 115
@@ -636,6 +716,19 @@ clockface model =
 -------------------------------------------------------------------------------
 
 
+correctedTime currentTime today zone =
+    let
+        ct =
+            Date.fromPosix zone currentTime
+
+        delta =
+            1000 * 60 * 60 * 24 * Date.diff Date.Days (today |> Maybe.withDefault (Date.fromRataDie 0)) ct
+    in
+    posixToMillis currentTime
+        + delta
+        |> millisToPosix
+
+
 timeToAngle : Int -> Int -> Int -> Float
 timeToAngle hour min sec =
     (((toFloat (modBy 12 hour) * 60 * 60)
@@ -718,6 +811,11 @@ type alias TimeInfo =
     , hourHandPos : Float -- pos on trig circle in radians
     , minuteHandPos : Float -- pos on trig circle in radians
     , secondHandPos : Float -- pos on trig circle in radians
+    , temporalTime :
+        { temporalHour : Float
+        , temporalMinute : Float
+        , temporalSecond : Float
+        }
     }
 
 
@@ -747,68 +845,127 @@ computeTimeInfo zone time sunrise sunset dayStartOffset =
         nightHourArc =
             nightHourLength / (24 * 60 * 60 * 1000) * (2 * pi)
 
+        temporalTime =
+            let
+                time_ =
+                    toFloat <| posixToMillis time
+
+                sunrise_ =
+                    toFloat <| posixToMillis sunrise
+
+                sunset_ =
+                    toFloat <| posixToMillis sunset
+
+                temporalMidnight =
+                    sunrise_ - 3 * nightHourLength
+
+                dayMinLength =
+                    dayHourLength / 60
+
+                daySecLength =
+                    dayMinLength / 60
+
+                nightMinLength =
+                    nightHourLength / 60
+
+                nightSecLength =
+                    nightMinLength / 60
+            in
+            if time_ >= temporalMidnight && time_ < sunrise_ then
+                --before dawn
+                let
+                    temporalHour =
+                        toFloat <| Basics.floor <| (time_ - temporalMidnight) / nightHourLength
+
+                    temporalMinute =
+                        toFloat <| Basics.floor <| (time_ - (temporalMidnight + (temporalHour * nightHourLength))) / nightMinLength
+
+                    temporalSecond =
+                        toFloat <| Basics.floor <| (time_ - (temporalMidnight + (temporalHour * nightHourLength) + (temporalMinute * nightMinLength))) / nightSecLength
+                in
+                { temporalHour = temporalHour
+                , temporalMinute = temporalMinute
+                , temporalSecond = temporalSecond
+                }
+
+            else if time_ >= sunrise_ && time_ < sunset_ then
+                --before sunset
+                let
+                    temporalHour =
+                        toFloat <| Basics.floor <| (time_ - sunrise_) / dayHourLength
+
+                    temporalMinute =
+                        toFloat <| Basics.floor <| (time_ - (sunrise_ + (temporalHour * dayHourLength))) / dayMinLength
+
+                    temporalSecond =
+                        toFloat <| Basics.floor <| (time_ - (sunrise_ + (temporalHour * dayHourLength) + (temporalMinute * dayMinLength))) / daySecLength
+                in
+                { temporalHour = 3 + temporalHour
+                , temporalMinute = temporalMinute
+                , temporalSecond = temporalSecond
+                }
+
+            else
+                --after sunset
+                let
+                    temporalHour =
+                        toFloat <| Basics.floor <| (time_ - sunset_) / nightHourLength
+
+                    temporalMinute =
+                        toFloat <| Basics.floor <| (time_ - (sunset_ + (temporalHour * nightHourLength))) / nightMinLength
+
+                    temporalSecond =
+                        toFloat <| Basics.floor <| (time_ - (sunset_ + (temporalHour * nightHourLength) + (temporalMinute * nightMinLength))) / nightSecLength
+                in
+                { temporalHour = 9 + temporalHour
+                , temporalMinute = temporalMinute
+                , temporalSecond = temporalSecond
+                }
+
         sunrisePos =
-            (3 * pi / 2) + (3 * dayHourArc)
+            (3 * pi / 2)
+                + (3 * dayHourArc)
+                |> normalize
 
         sunsetPos =
-            (pi / 2) + (3 * nightHourArc)
+            (pi / 2)
+                + (3 * nightHourArc)
+                |> normalize
 
         hourHandPos =
             sunrisePos
                 + (toFloat <| posixToMillis sunrise - posixToMillis time)
                 / (24 * 60 * 60 * 1000)
                 * (2 * pi)
+                |> normalize
 
         isDay =
-            (posixToMillis time > posixToMillis sunrise)
-                && (posixToMillis time < posixToMillis sunset)
+            let
+                alphaDiff a b =
+                    if a > b then
+                        a - b
+
+                    else
+                        b - a
+
+                d1 =
+                    --shortest interval between sunrise and sunset
+                    alphaDiff sunrisePos sunsetPos
+
+                d2 =
+                    alphaDiff sunrisePos hourHandPos + alphaDiff sunsetPos hourHandPos
+            in
+            if dayHourLength > nightHourLength then
+                d2 > d1
+
+            else
+                d2 <= d1
 
         minuteHandPos =
-            let
-                hourLength =
-                    if isDay then
-                        dayHourLength
-
-                    else
-                        nightHourLength
-
-                minutes =
-                    modBy (round hourLength)
-                        (posixToMillis sunrise - posixToMillis time)
-                        |> toFloat
-            in
-            (pi / 2)
-                + minutes
-                / hourLength
-                * (2 * pi)
+            (pi / 2) - (temporalTime.temporalMinute / 60) * 2 * pi
 
         secondHandPos =
-            let
-                hourLength =
-                    if isDay then
-                        dayHourLength
-
-                    else
-                        nightHourLength
-
-                minuteLength =
-                    hourLength / 60
-
-                minutes =
-                    modBy (round hourLength)
-                        (posixToMillis sunrise - posixToMillis time)
-
-                seconds =
-                    modBy (round minuteLength)
-                        minutes
-                        |> toFloat
-            in
-            (pi / 2)
-                + ((seconds
-                        / minuteLength
-                   )
-                    * (2 * pi)
-                  )
+            (pi / 2) - (temporalTime.temporalSecond / 60) * 2 * pi
     in
     { dayLength = dayLength
     , nightLength = nightLength
@@ -821,7 +978,20 @@ computeTimeInfo zone time sunrise sunset dayStartOffset =
     , hourHandPos = hourHandPos
     , minuteHandPos = minuteHandPos
     , secondHandPos = secondHandPos
+    , temporalTime = temporalTime
     }
+
+
+normalize alpha =
+    let
+        a_ =
+            Basics.Extra.fractionalModBy (2 * pi) alpha
+    in
+    if a_ < 0 then
+        2 * pi + a_
+
+    else
+        a_
 
 
 
@@ -881,6 +1051,8 @@ getSunInfo latitude longitude date =
 
 
 geolocDecoder =
-    D.map2 Tuple.pair
-        (D.at [ "coords", "latitude" ] D.float)
-        (D.at [ "coords", "longitude" ] D.float)
+    D.oneOf
+        [ D.map2 Tuple.pair
+            (D.at [ "coords", "latitude" ] D.float)
+            (D.at [ "coords", "longitude" ] D.float)
+        ]

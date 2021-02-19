@@ -31,9 +31,20 @@
     app.ports.getGeoloc.subscribe(getLocation);
 
     function getLocation() {
+      var options = {
+        enableHighAccuracy: true,
+        timeout: 5000,
+        maximumAge: 0
+      };
+
+
       if (navigator.geolocation) {
-          navigator.geolocation.getCurrentPosition(app.ports.geoloc.send);
+          navigator.geolocation.getCurrentPosition(app.ports.geoloc.send,
+            function(error) {
+              app.ports.geoloc.send("geolocation not allowed");
+              }, options);
       } else {
+        app.ports.geoloc.send("no geolocation");
         console.log("no geolocation");
       } 
     }
