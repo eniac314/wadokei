@@ -44,6 +44,8 @@ type alias Model =
     , latitudeBuffer : String
     , longitude : Float
     , longitudeBuffer : String
+    , sunInfoCache : Dict ( Float, Float, Int ) SunInfo
+    , waitingForSunInfo : Bool
     }
 
 
@@ -77,7 +79,7 @@ main =
 
 subscriptions model =
     Sub.batch
-        [ Time.every 50 Tick
+        [ Time.every 200 Tick
         , geoloc GotGeolocation
         ]
 
@@ -95,6 +97,8 @@ init flags =
       , latitudeBuffer = "" --String.fromFloat 47.5556
       , longitude = 0 --3.2744
       , longitudeBuffer = "" --String.fromFloat 3.2744
+      , sunInfoCache = Dict.empty
+      , waitingForSunInfo = False
       }
     , Cmd.batch
         [ Task.perform SetZone Time.here
@@ -119,18 +123,89 @@ update msg model =
         Tick t ->
             let
                 newTime =
-                    posixToMillis t
-                        + (model.hourOffset * 60 * 60 * 1000)
-                        |> millisToPosix
+                    correctedTime model t
+
+                ( sunInfo, waitingForSunInfo, cmd ) =
+                    case ( model.waitingForSunInfo, model.sunInfo ) of
+                        ( False, Just si ) ->
+                            let
+                                dayLength =
+                                    sunset_ - sunrise_
+
+                                nightLength =
+                                    (24 * 60 * 60 * 1000)
+                                        - dayLength
+
+                                dayHourLength =
+                                    dayLength / 6
+
+                                nightHourLength =
+                                    nightLength / 6
+
+                                sunrise_ =
+                                    toFloat <| posixToMillis si.sunrise
+
+                                sunset_ =
+                                    toFloat <| posixToMillis si.sunset
+
+                                temporalDayStart =
+                                    sunrise_ - 3 * nightHourLength
+
+                                temporalDayEnd =
+                                    temporalDayStart + (24 * 60 * 60 * 1000)
+
+                                newTime_ =
+                                    toFloat <| posixToMillis newTime
+
+                                zone_ =
+                                    model.zone |> Maybe.withDefault utc
+                            in
+                            if newTime_ >= temporalDayStart && newTime_ <= temporalDayEnd then
+                                ( Just si, False, Cmd.none )
+
+                            else
+                                let
+                                    correctedDate =
+                                        --Adjust date because temporal midnight and gregorian midnight are not the same
+                                        if Date.day si.date == (Date.day <| Date.fromPosix zone_ newTime) then
+                                            if newTime_ < temporalDayStart then
+                                                Time.Extra.add Time.Extra.Hour -1 zone_ newTime
+
+                                            else if newTime_ > temporalDayEnd then
+                                                Time.Extra.add Time.Extra.Hour 1 zone_ newTime
+
+                                            else
+                                                newTime
+
+                                        else
+                                            newTime
+                                in
+                                case Dict.get ( model.latitude, model.longitude, Date.toRataDie <| Date.fromPosix zone_ correctedDate ) model.sunInfoCache of
+                                    Just si_ ->
+                                        ( Just si_, False, Cmd.none )
+
+                                    Nothing ->
+                                        ( model.sunInfo, True, getSunInfo model.latitude model.longitude (Date.fromPosix zone_ correctedDate) )
+
+                        _ ->
+                            ( model.sunInfo, model.waitingForSunInfo, Cmd.none )
             in
-            ( { model | currentTime = Just newTime }
-            , Cmd.none
+            ( { model
+                | currentTime = Just newTime
+                , waitingForSunInfo = waitingForSunInfo
+                , sunInfo = sunInfo
+              }
+            , cmd
             )
 
         GotSunInfo res ->
             case res of
                 Ok si ->
-                    ( { model | sunInfo = Just si }
+                    ( { model
+                        | sunInfo = Just si
+                        , sunInfoCache = Dict.insert ( model.latitude, model.longitude, Date.toRataDie si.date ) si model.sunInfoCache
+                        , waitingForSunInfo = False
+                      }
                     , Cmd.none
                     )
 
@@ -234,11 +309,7 @@ update msg model =
         ReloadSunInfo ->
             case ( model.currentTime, model.zone ) of
                 ( Just time, Just zone ) ->
-                    let
-                        today =
-                            Date.fromPosix zone (correctedTime time model.today zone)
-                    in
-                    ( { model | today = Just today }, getSunInfo model.latitude model.longitude )
+                    ( model, getSunInfo model.latitude model.longitude (Date.fromPosix zone time) )
 
                 _ ->
                     ( model, Cmd.none )
@@ -261,6 +332,10 @@ update msg model =
 
         NoOp ->
             ( model, Cmd.none )
+
+
+zeroTime =
+    millisToPosix 0
 
 
 
@@ -301,8 +376,11 @@ timeInfoView model =
                 second t =
                     String.padLeft 2 '0' (String.fromInt (Time.toSecond zone t))
 
+                day t =
+                    String.padLeft 2 '0' (String.fromInt (Time.toDay zone t))
+
                 ti =
-                    computeTimeInfo zone (correctedTime time model.today zone) sunrise sunset 0
+                    computeTimeInfo zone time sunrise sunset 0
 
                 milliToStr v =
                     let
@@ -533,7 +611,7 @@ clockface model =
         ( Just zone, ( Just time, Just today ), Just { sunrise, sunset } ) ->
             let
                 ti =
-                    computeTimeInfo zone (correctedTime time model.today zone) sunrise sunset 0
+                    computeTimeInfo zone time sunrise sunset 0
 
                 outerRim =
                     circle 115
@@ -716,17 +794,15 @@ clockface model =
 -------------------------------------------------------------------------------
 
 
-correctedTime currentTime today zone =
-    let
-        ct =
-            Date.fromPosix zone currentTime
+correctedTime model now =
+    case model.zone of
+        Just zone ->
+            Time.Extra.add Time.Extra.Month model.monthOffset zone now
+                |> Time.Extra.add Time.Extra.Day model.dayOffset zone
+                |> Time.Extra.add Time.Extra.Hour model.hourOffset zone
 
-        delta =
-            1000 * 60 * 60 * 24 * Date.diff Date.Days (today |> Maybe.withDefault (Date.fromRataDie 0)) ct
-    in
-    posixToMillis currentTime
-        + delta
-        |> millisToPosix
+        _ ->
+            now
 
 
 timeToAngle : Int -> Int -> Int -> Float
@@ -995,18 +1071,22 @@ normalize alpha =
 
 
 
+--temporalTimeToDate sunrise temporalTime =
+--    modBy 12 temporalTime.temporalHour
+--    |>
 -------------------------------------------------------------------------------
 
 
 type alias SunInfo =
     { sunrise : Posix
     , sunset : Posix
+    , date : Date
     }
 
 
-sunInfoDecoder =
+sunInfoDecoder date =
     D.field "results"
-        (D.map2 SunInfo
+        (D.map2 (\a b -> SunInfo a b date)
             (D.field "sunrise"
                 (D.string
                     |> D.map Iso8601.toTime
@@ -1046,7 +1126,7 @@ getSunInfo latitude longitude date =
                 ++ "&date="
                 ++ dateStr
                 ++ "&formatted=0\n"
-        , expect = Http.expectJson GotSunInfo sunInfoDecoder
+        , expect = Http.expectJson GotSunInfo (sunInfoDecoder date)
         }
 
 
