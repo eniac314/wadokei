@@ -398,7 +398,6 @@ timeInfoView model =
             column
                 [ spacing 15
                 , padding 20
-                , Element.width (px 800)
                 ]
                 [ row
                     [ spacing 10 ]
