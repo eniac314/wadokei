@@ -33,8 +33,7 @@ port geoloc : (D.Value -> msg) -> Sub msg
 
 
 type alias Model =
-    { today : Maybe Date.Date
-    , currentTime : Maybe Posix
+    { currentTime : Maybe Posix
     , zone : Maybe Zone
     , sunInfo : Maybe SunInfo
     , hourOffset : Int
@@ -50,11 +49,10 @@ type alias Model =
 
 
 type Msg
-    = CurrentDate Date
-    | SetZone Zone
+    = SetZone Zone
     | Tick Posix
     | GotSunInfo (Result Error SunInfo)
-    | GotGeolocation D.Value
+    | GotGeolocation Zone D.Value
     | IncHour
     | DecHour
     | IncDay
@@ -80,14 +78,13 @@ main =
 subscriptions model =
     Sub.batch
         [ Time.every 200 Tick
-        , geoloc GotGeolocation
+        , geoloc (GotGeolocation (Maybe.withDefault utc model.zone))
         ]
 
 
 init : () -> ( Model, Cmd Msg )
 init flags =
-    ( { today = Nothing
-      , currentTime = Nothing
+    ( { currentTime = Nothing
       , sunInfo = Nothing
       , zone = Nothing
       , hourOffset = 0
@@ -102,22 +99,15 @@ init flags =
       }
     , Cmd.batch
         [ Task.perform SetZone Time.here
-        , Task.perform CurrentDate Date.today
-        , getGeoloc ()
         ]
     )
 
 
 update msg model =
     case msg of
-        CurrentDate date ->
-            ( { model | today = Just date }
-            , Cmd.none
-            )
-
         SetZone zone ->
             ( { model | zone = Just zone }
-            , Cmd.none
+            , getGeoloc ()
             )
 
         Tick t ->
@@ -212,7 +202,7 @@ update msg model =
                 _ ->
                     ( model, Cmd.none )
 
-        GotGeolocation val ->
+        GotGeolocation zone val ->
             case D.decodeValue geolocDecoder val of
                 Ok ( lat, lng ) ->
                     let
@@ -225,8 +215,8 @@ update msg model =
                             }
                     in
                     ( newModel
-                    , Maybe.map (getSunInfo newModel.latitude newModel.longitude)
-                        newModel.today
+                    , Maybe.map (Date.fromPosix zone) newModel.currentTime
+                        |> Maybe.map (getSunInfo newModel.latitude newModel.longitude)
                         |> Maybe.withDefault Cmd.none
                     )
 
@@ -247,8 +237,8 @@ update msg model =
                             }
                     in
                     ( newModel
-                    , Maybe.map (getSunInfo newModel.latitude newModel.longitude)
-                        newModel.today
+                    , Maybe.map (Date.fromPosix zone) newModel.currentTime
+                        |> Maybe.map (getSunInfo newModel.latitude newModel.longitude)
                         |> Maybe.withDefault Cmd.none
                     )
 
@@ -315,20 +305,32 @@ update msg model =
                     ( model, Cmd.none )
 
         Reset ->
-            let
-                newDate =
-                    Maybe.map (Date.add Days (-1 * model.dayOffset)) model.today
-                        |> Maybe.map (Date.add Months (-1 * model.monthOffset))
-            in
-            ( { model
-                | hourOffset = 0
-                , dayOffset = 0
-                , monthOffset = 0
-                , today = newDate
-              }
-            , Maybe.map (getSunInfo model.latitude model.longitude) newDate
-                |> Maybe.withDefault Cmd.none
-            )
+            case ( model.currentTime, model.zone ) of
+                ( Just currentTime, Just zone ) ->
+                    let
+                        currentTime_ =
+                            correctedTime
+                                { model
+                                    | hourOffset = 0
+                                    , dayOffset = 0
+                                    , monthOffset = 0
+                                }
+                                currentTime
+
+                        today =
+                            Date.fromPosix zone currentTime_
+                    in
+                    ( { model
+                        | hourOffset = 0
+                        , dayOffset = 0
+                        , monthOffset = 0
+                        , currentTime = Just currentTime_
+                      }
+                    , getSunInfo model.latitude model.longitude today
+                    )
+
+                _ ->
+                    ( model, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )
@@ -606,9 +608,12 @@ controlPanelView model =
 
 
 clockface model =
-    case ( model.zone, ( model.currentTime, model.today ), model.sunInfo ) of
-        ( Just zone, ( Just time, Just today ), Just { sunrise, sunset } ) ->
+    case ( model.zone, model.currentTime, model.sunInfo ) of
+        ( Just zone, Just time, Just { sunrise, sunset } ) ->
             let
+                today =
+                    Date.fromPosix zone time
+
                 ti =
                     computeTimeInfo zone time sunrise sunset 0
 
