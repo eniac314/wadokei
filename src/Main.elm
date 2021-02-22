@@ -46,6 +46,7 @@ type alias Model =
     , sunInfoCache : Dict ( Float, Float, Int ) SunInfo
     , waitingForSunInfo : Bool
     , adjusted : Bool
+    , halfHourOffset : Bool
     }
 
 
@@ -65,6 +66,7 @@ type Msg
     | ReloadSunInfo
     | Reset
     | ToogleAdjusted
+    | ToogleHalfHourOffset
     | NoOp
 
 
@@ -99,6 +101,7 @@ init flags =
       , sunInfoCache = Dict.empty
       , waitingForSunInfo = False
       , adjusted = False
+      , halfHourOffset = False
       }
     , Cmd.batch
         [ Task.perform SetZone Time.here
@@ -326,6 +329,9 @@ update msg model =
         ToogleAdjusted ->
             ( { model | adjusted = not model.adjusted }, Cmd.none )
 
+        ToogleHalfHourOffset ->
+            ( { model | halfHourOffset = not model.halfHourOffset }, Cmd.none )
+
         NoOp ->
             ( model, Cmd.none )
 
@@ -381,8 +387,19 @@ timeInfoView model =
                 day t =
                     String.padLeft 2 '0' (String.fromInt (Time.toDay zone t))
 
+                ( sunrise_, sunset_ ) =
+                    if model.halfHourOffset then
+                        ( (posixToMillis sunrise - 1000 * 60 * 30)
+                            |> millisToPosix
+                        , (posixToMillis sunset + 1000 * 60 * 30)
+                            |> millisToPosix
+                        )
+
+                    else
+                        ( sunrise, sunset )
+
                 ti =
-                    computeTimeInfo zone time sunrise sunset 0
+                    computeTimeInfo zone time sunrise_ sunset_
 
                 milliToStr v =
                     let
@@ -443,48 +460,6 @@ timeInfoView model =
                     [ text "temporalSecond: "
                     , Element.text <| String.fromFloat ti.temporalTime.temporalSecond
                     ]
-
-                --, row
-                --    [ spacing 10 ]
-                --    [ text "Hour hand pos (pos on trig circle in radians):"
-                --    , Element.text <| String.fromFloat ti.hourHandPos
-                --    ]
-                --, row
-                --    [ spacing 10 ]
-                --    [ text "Minute hand pos (pos on trig circle in radians):"
-                --    , Element.text <| String.fromFloat ti.minuteHandPos
-                --    ]
-                --, row
-                --    [ spacing 10 ]
-                --    [ text "Minute hand pos (pos on trig circle in radians):"
-                --    , Element.text <| String.fromFloat ti.minuteHandPos
-                --    ]
-                --, row
-                --    [ spacing 10 ]
-                --    [ text <|
-                --        "Is day:"
-                --            ++ (let
-                --                    alphaDiff a b =
-                --                        if a > b then
-                --                            a - b
-                --                        else
-                --                            b - a
-                --                    d1 =
-                --                        alphaDiff ti.sunrisePos ti.sunsetPos
-                --                    d2 =
-                --                        alphaDiff ti.sunrisePos ti.hourHandPos + alphaDiff ti.sunsetPos ti.hourHandPos
-                --                in
-                --                if
-                --                    if ti.dayHourLength > ti.nightHourLength then
-                --                        d2 > d1
-                --                    else
-                --                        d2 <= d1
-                --                then
-                --                    " yes"
-                --                else
-                --                    " no"
-                --               )
-                --    ]
                 ]
 
         _ ->
@@ -588,28 +563,44 @@ controlPanelView model =
                         , label = Input.labelLeft [ centerY, Element.width (px 100) ] (text "Longitude: ")
                         }
                     ]
-                , row
+                , column
                     [ spacing 15 ]
-                    [ Input.button
-                        buttonStyle
-                        { onPress = Just ReloadSunInfo
-                        , label = text "Reload sun info"
-                        }
-                    , Input.button
-                        buttonStyle
-                        { onPress = Just Reset
-                        , label = text "Reset"
-                        }
-                    , Input.button
-                        buttonStyle
-                        { onPress = Just ToogleAdjusted
-                        , label =
-                            if not model.adjusted then
-                                text "Adjust to delims"
+                    [ row
+                        [ spacing 15 ]
+                        [ Input.button
+                            buttonStyle
+                            { onPress = Just ToogleAdjusted
+                            , label =
+                                if not model.adjusted then
+                                    text "Adjust to delims"
 
-                            else
-                                text "Adjust to symbols"
-                        }
+                                else
+                                    text "Adjust to symbols"
+                            }
+                        , Input.button
+                            buttonStyle
+                            { onPress = Just ToogleHalfHourOffset
+                            , label =
+                                if model.halfHourOffset then
+                                    text "Turn off halfHourOffset"
+
+                                else
+                                    text "Turn on halfHourOffset"
+                            }
+                        ]
+                    , row
+                        [ spacing 15 ]
+                        [ Input.button
+                            buttonStyle
+                            { onPress = Just ReloadSunInfo
+                            , label = text "Reload sun info"
+                            }
+                        , Input.button
+                            buttonStyle
+                            { onPress = Just Reset
+                            , label = text "Reset"
+                            }
+                        ]
                     ]
                 ]
 
@@ -630,8 +621,19 @@ clockface model =
                 today =
                     Date.fromPosix zone time
 
+                ( sunrise_, sunset_ ) =
+                    if model.halfHourOffset then
+                        ( (posixToMillis sunrise - 1000 * 60 * 30)
+                            |> millisToPosix
+                        , (posixToMillis sunset + 1000 * 60 * 30)
+                            |> millisToPosix
+                        )
+
+                    else
+                        ( sunrise, sunset )
+
                 ti =
-                    computeTimeInfo zone time sunrise sunset 0
+                    computeTimeInfo zone time sunrise_ sunset_
 
                 dayNightBackground =
                     let
@@ -984,15 +986,14 @@ type alias TimeInfo =
     }
 
 
-computeTimeInfo : Zone -> Posix -> Posix -> Posix -> Int -> TimeInfo
-computeTimeInfo zone time sunrise sunset dayStartOffset =
+computeTimeInfo : Zone -> Posix -> Posix -> Posix -> TimeInfo
+computeTimeInfo zone time sunrise sunset =
     let
         dayLength =
             toFloat <|
-                (2 * dayStartOffset)
-                    + (posixToMillis sunset
-                        - posixToMillis sunrise
-                      )
+                (posixToMillis sunset
+                    - posixToMillis sunrise
+                )
 
         nightLength =
             (24 * 60 * 60 * 1000)
