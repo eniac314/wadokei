@@ -33,8 +33,8 @@ port geoloc : (D.Value -> msg) -> Sub msg
 
 
 type alias Model =
-    { currentTime : Maybe Posix
-    , zone : Maybe Zone
+    { currentTime : Posix
+    , zone : Zone
     , sunInfo : Maybe SunInfo
     , hourOffset : Int
     , dayOffset : Int
@@ -45,6 +45,7 @@ type alias Model =
     , longitudeBuffer : String
     , sunInfoCache : Dict ( Float, Float, Int ) SunInfo
     , waitingForSunInfo : Bool
+    , adjusted : Bool
     }
 
 
@@ -52,7 +53,7 @@ type Msg
     = SetZone Zone
     | Tick Posix
     | GotSunInfo (Result Error SunInfo)
-    | GotGeolocation Zone D.Value
+    | GotGeolocation D.Value
     | IncHour
     | DecHour
     | IncDay
@@ -63,6 +64,7 @@ type Msg
     | SetLongitude String
     | ReloadSunInfo
     | Reset
+    | ToogleAdjusted
     | NoOp
 
 
@@ -78,15 +80,15 @@ main =
 subscriptions model =
     Sub.batch
         [ Time.every 200 Tick
-        , geoloc (GotGeolocation (Maybe.withDefault utc model.zone))
+        , geoloc GotGeolocation
         ]
 
 
-init : () -> ( Model, Cmd Msg )
+init : { currentTime : Int } -> ( Model, Cmd Msg )
 init flags =
-    ( { currentTime = Nothing
+    ( { currentTime = millisToPosix flags.currentTime
       , sunInfo = Nothing
-      , zone = Nothing
+      , zone = utc
       , hourOffset = 0
       , dayOffset = 0
       , monthOffset = 0
@@ -96,6 +98,7 @@ init flags =
       , longitudeBuffer = "" --String.fromFloat 3.2744
       , sunInfoCache = Dict.empty
       , waitingForSunInfo = False
+      , adjusted = False
       }
     , Cmd.batch
         [ Task.perform SetZone Time.here
@@ -106,7 +109,7 @@ init flags =
 update msg model =
     case msg of
         SetZone zone ->
-            ( { model | zone = Just zone }
+            ( { model | zone = zone }
             , getGeoloc ()
             )
 
@@ -148,7 +151,7 @@ update msg model =
                                     toFloat <| posixToMillis newTime
 
                                 zone_ =
-                                    model.zone |> Maybe.withDefault utc
+                                    model.zone
                             in
                             if newTime_ >= temporalDayStart && newTime_ <= temporalDayEnd then
                                 ( Just si, False, Cmd.none )
@@ -181,7 +184,7 @@ update msg model =
                             ( model.sunInfo, model.waitingForSunInfo, Cmd.none )
             in
             ( { model
-                | currentTime = Just newTime
+                | currentTime = newTime
                 , waitingForSunInfo = waitingForSunInfo
                 , sunInfo = sunInfo
               }
@@ -202,7 +205,7 @@ update msg model =
                 _ ->
                     ( model, Cmd.none )
 
-        GotGeolocation zone val ->
+        GotGeolocation val ->
             case D.decodeValue geolocDecoder val of
                 Ok ( lat, lng ) ->
                     let
@@ -215,9 +218,8 @@ update msg model =
                             }
                     in
                     ( newModel
-                    , Maybe.map (Date.fromPosix zone) newModel.currentTime
-                        |> Maybe.map (getSunInfo newModel.latitude newModel.longitude)
-                        |> Maybe.withDefault Cmd.none
+                    , Date.fromPosix model.zone newModel.currentTime
+                        |> getSunInfo newModel.latitude newModel.longitude
                     )
 
                 Err e ->
@@ -237,9 +239,8 @@ update msg model =
                             }
                     in
                     ( newModel
-                    , Maybe.map (Date.fromPosix zone) newModel.currentTime
-                        |> Maybe.map (getSunInfo newModel.latitude newModel.longitude)
-                        |> Maybe.withDefault Cmd.none
+                    , Date.fromPosix model.zone newModel.currentTime
+                        |> getSunInfo newModel.latitude newModel.longitude
                     )
 
         IncHour ->
@@ -297,40 +298,33 @@ update msg model =
             )
 
         ReloadSunInfo ->
-            case ( model.currentTime, model.zone ) of
-                ( Just time, Just zone ) ->
-                    ( model, getSunInfo model.latitude model.longitude (Date.fromPosix zone time) )
-
-                _ ->
-                    ( model, Cmd.none )
+            ( model, getSunInfo model.latitude model.longitude (Date.fromPosix model.zone model.currentTime) )
 
         Reset ->
-            case ( model.currentTime, model.zone ) of
-                ( Just currentTime, Just zone ) ->
-                    let
-                        currentTime_ =
-                            correctedTime
-                                { model
-                                    | hourOffset = 0
-                                    , dayOffset = 0
-                                    , monthOffset = 0
-                                }
-                                currentTime
+            let
+                currentTime_ =
+                    correctedTime
+                        { model
+                            | hourOffset = 0
+                            , dayOffset = 0
+                            , monthOffset = 0
+                        }
+                        model.currentTime
 
-                        today =
-                            Date.fromPosix zone currentTime_
-                    in
-                    ( { model
-                        | hourOffset = 0
-                        , dayOffset = 0
-                        , monthOffset = 0
-                        , currentTime = Just currentTime_
-                      }
-                    , getSunInfo model.latitude model.longitude today
-                    )
+                today =
+                    Date.fromPosix model.zone currentTime_
+            in
+            ( { model
+                | hourOffset = 0
+                , dayOffset = 0
+                , monthOffset = 0
+                , currentTime = currentTime_
+              }
+            , getSunInfo model.latitude model.longitude today
+            )
 
-                _ ->
-                    ( model, Cmd.none )
+        ToogleAdjusted ->
+            ( { model | adjusted = not model.adjusted }, Cmd.none )
 
         NoOp ->
             ( model, Cmd.none )
@@ -366,9 +360,15 @@ view model =
 
 
 timeInfoView model =
-    case ( model.zone, model.currentTime, model.sunInfo ) of
-        ( Just zone, Just time, Just { sunrise, sunset } ) ->
+    case model.sunInfo of
+        Just { sunrise, sunset } ->
             let
+                zone =
+                    model.zone
+
+                time =
+                    model.currentTime
+
                 hour t =
                     String.padLeft 2 '0' (String.fromInt (Time.toHour zone t))
 
@@ -600,6 +600,16 @@ controlPanelView model =
                         { onPress = Just Reset
                         , label = text "Reset"
                         }
+                    , Input.button
+                        buttonStyle
+                        { onPress = Just ToogleAdjusted
+                        , label =
+                            if not model.adjusted then
+                                text "Adjust to delims"
+
+                            else
+                                text "Adjust to symbols"
+                        }
                     ]
                 ]
 
@@ -608,9 +618,15 @@ controlPanelView model =
 
 
 clockface model =
-    case ( model.zone, model.currentTime, model.sunInfo ) of
-        ( Just zone, Just time, Just { sunrise, sunset } ) ->
+    case model.sunInfo of
+        Just { sunrise, sunset } ->
             let
+                zone =
+                    model.zone
+
+                time =
+                    model.currentTime
+
                 today =
                     Date.fromPosix zone time
 
@@ -654,7 +670,16 @@ clockface model =
                             )
                             ( [], ti.sunrisePos + 2 * pi )
                         |> Tuple.first
-                        |> List.map (\( s, angle ) -> ( s, angle - ti.dayHourArc / 2 ))
+                        |> List.map
+                            (\( s, angle ) ->
+                                ( s
+                                , if model.adjusted then
+                                    angle - ti.dayHourArc / 2
+
+                                  else
+                                    angle
+                                )
+                            )
 
                 nightSymbols =
                     [ ( "酉", "六" )
@@ -672,7 +697,107 @@ clockface model =
                             )
                             ( [], ti.sunsetPos + 2 * pi )
                         |> Tuple.first
-                        |> List.map (\( s, angle ) -> ( s, angle - ti.nightHourArc / 2 ))
+                        |> List.map
+                            (\( s, angle ) ->
+                                ( s
+                                , if model.adjusted then
+                                    angle - ti.dayHourArc / 2
+
+                                  else
+                                    angle
+                                )
+                            )
+
+                dayNightBackground =
+                    --let
+                    --    anglesDay acc current =
+                    --        let
+                    --            ( f, g ) =
+                    --                if ti.sunsetPos > ti.sunrisePos then
+                    --                    ( (>), (+) )
+                    --                else
+                    --                    ( (<), (-) )
+                    --        in
+                    --        if f current ti.sunsetPos then
+                    --            acc
+                    --        else
+                    --            anglesDay (current :: acc) (g current 0.005)
+                    --in
+                    --List.map
+                    --    (\angle ->
+                    --        let
+                    --            ( x1, y1 ) =
+                    --                fromPolar ( 69, angle )
+                    --            ( x2, y2 ) =
+                    --                fromPolar ( 114, angle )
+                    --        in
+                    --        ( ( x1, y1 ), ( x2, y2 ) )
+                    --    )
+                    --    (anglesDay [] ti.sunrisePos)
+                    --    |> List.map (\( a, b ) -> segment a b)
+                    --    |> List.map (traced (solid 1 (uniform yellow)))
+                    --    |> group
+                    --    |> opacity 1
+                    let
+                        l =
+                            225
+
+                        --sqrt (115 * 115 + 115 * 115)
+                        origin =
+                            ( 0, 0 )
+
+                        dayApex =
+                            ( 0, -l )
+
+                        nightApex =
+                            ( 0, l )
+
+                        sunriseApex =
+                            fromPolar ( l, ti.sunrisePos )
+
+                        sunsetApex =
+                            fromPolar ( l, ti.sunsetPos )
+
+                        daylight =
+                            polygon [ origin, sunriseApex, dayApex, sunsetApex ]
+                                |> filled (uniform yellow)
+
+                        night =
+                            polygon [ origin, sunriseApex, nightApex, sunsetApex ]
+                                |> filled (uniform blue)
+
+                        --background =
+                        --    circle 85
+                        --        |> styled
+                        --            ( uniform white
+                        --            , solid 1 (uniform darkCharcoal)
+                        --            )
+                        outerTransparentRim =
+                            circle (116 + 35)
+                                |> outlined (solid 70 (uniform white))
+
+                        background =
+                            circle 115
+                                |> styled
+                                    ( Collage.transparent
+                                    , solid 1 (uniform darkCharcoal)
+                                    )
+
+                        --List.map
+                        --    (\l ->
+                        --        circle 115
+                        --            |> styled
+                        --                ( Collage.transparent
+                        --                , solid 1 (uniform darkCharcoal)
+                        --                )
+                        --    )
+                    in
+                    group
+                        [ background
+                        , outerTransparentRim
+                        , group [ daylight, night ]
+                            |> opacity 0.6
+                        ]
 
                 delims hourArc symbols =
                     List.map
@@ -697,7 +822,10 @@ clockface model =
 
                         sView =
                             Text.fromString sign
-                                |> (if isDay then
+                                |> (if not model.adjusted then
+                                        Text.color black
+
+                                    else if isDay then
                                         Text.color yellow
 
                                     else
@@ -757,6 +885,9 @@ clockface model =
                 , hand darkRed 2 65 ti.hourHandPos
                 , hand darkRed 2 82 ti.minuteHandPos
                 , hand darkBlue 2 112 ti.secondHandPos
+
+                --, hand darkBlue 2 114 ti.sunrisePos
+                --, hand darkBlue 2 114 ti.sunsetPos
                 , sekkiView
                 , dateView
                 ]
@@ -766,10 +897,14 @@ clockface model =
                     ++ delims ti.nightHourArc nightSymbols
                     ++ [ innerRim
                        , middleRim
-                       , outerRim
+                       , if model.adjusted then
+                            outerRim
+
+                         else
+                            dayNightBackground
                        ]
             )
-                |> svg
+                |> svgBox ( 235, 235 )
                 |> (\x ->
                         el
                             [ padding 20
@@ -799,14 +934,9 @@ clockface model =
 
 
 correctedTime model now =
-    case model.zone of
-        Just zone ->
-            Time.Extra.add Time.Extra.Month model.monthOffset zone now
-                |> Time.Extra.add Time.Extra.Day model.dayOffset zone
-                |> Time.Extra.add Time.Extra.Hour model.hourOffset zone
-
-        _ ->
-            now
+    Time.Extra.add Time.Extra.Month model.monthOffset model.zone now
+        |> Time.Extra.add Time.Extra.Day model.dayOffset model.zone
+        |> Time.Extra.add Time.Extra.Hour model.hourOffset model.zone
 
 
 timeToAngle : Int -> Int -> Int -> Float

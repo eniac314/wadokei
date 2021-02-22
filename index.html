@@ -9,24 +9,10 @@
 
 <body>
   <script type="text/javascript">
-    
-    var app = Elm.Main.init();
+    var currentTime = new Date().getTime();
+    var tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-    // app.ports.loadCaptcha.subscribe(function() {
-    //   grecaptcha.render(
-    //     document.querySelector('div.g-recaptcha'),
-    //     {
-    //         sitekey: '6LcasjsUAAAAANR2oVHvjDYFpjLDuRsruD16Q_aF',
-    //         callback: function onSubmit(val) {
-    //         app.ports.captcha_port.send(val);
-    //         }
-    //     }
-    //   );  
-    // });
-    
-    // app.ports.toSearchEngine.subscribe(function(s){
-    //    worker.postMessage(s);
-    // });
+    var app = Elm.Main.init({flags: {currentTime: currentTime, zone: tz}});    
 
     app.ports.getGeoloc.subscribe(getLocation);
 
