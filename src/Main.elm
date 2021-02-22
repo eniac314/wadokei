@@ -633,6 +633,52 @@ clockface model =
                 ti =
                     computeTimeInfo zone time sunrise sunset 0
 
+                dayNightBackground =
+                    let
+                        l =
+                            225
+
+                        origin =
+                            ( 0, 0 )
+
+                        dayApex =
+                            ( 0, -l )
+
+                        nightApex =
+                            ( 0, l )
+
+                        sunriseApex =
+                            fromPolar ( l, ti.sunrisePos )
+
+                        sunsetApex =
+                            fromPolar ( l, ti.sunsetPos )
+
+                        daylight =
+                            polygon [ origin, sunriseApex, dayApex, sunsetApex ]
+                                |> filled (uniform yellow)
+
+                        night =
+                            polygon [ origin, sunriseApex, nightApex, sunsetApex ]
+                                |> filled (uniform blue)
+
+                        outerTransparentRim =
+                            circle (116 + 35)
+                                |> outlined (solid 70 (uniform white))
+
+                        background =
+                            circle 115
+                                |> styled
+                                    ( Collage.transparent
+                                    , solid 1 (uniform darkCharcoal)
+                                    )
+                    in
+                    group
+                        [ background
+                        , outerTransparentRim
+                        , group [ daylight, night ]
+                            |> opacity 0.6
+                        ]
+
                 outerRim =
                     circle 115
                         |> styled
@@ -701,103 +747,12 @@ clockface model =
                             (\( s, angle ) ->
                                 ( s
                                 , if model.adjusted then
-                                    angle - ti.dayHourArc / 2
+                                    angle - ti.nightHourArc / 2
 
                                   else
                                     angle
                                 )
                             )
-
-                dayNightBackground =
-                    --let
-                    --    anglesDay acc current =
-                    --        let
-                    --            ( f, g ) =
-                    --                if ti.sunsetPos > ti.sunrisePos then
-                    --                    ( (>), (+) )
-                    --                else
-                    --                    ( (<), (-) )
-                    --        in
-                    --        if f current ti.sunsetPos then
-                    --            acc
-                    --        else
-                    --            anglesDay (current :: acc) (g current 0.005)
-                    --in
-                    --List.map
-                    --    (\angle ->
-                    --        let
-                    --            ( x1, y1 ) =
-                    --                fromPolar ( 69, angle )
-                    --            ( x2, y2 ) =
-                    --                fromPolar ( 114, angle )
-                    --        in
-                    --        ( ( x1, y1 ), ( x2, y2 ) )
-                    --    )
-                    --    (anglesDay [] ti.sunrisePos)
-                    --    |> List.map (\( a, b ) -> segment a b)
-                    --    |> List.map (traced (solid 1 (uniform yellow)))
-                    --    |> group
-                    --    |> opacity 1
-                    let
-                        l =
-                            225
-
-                        --sqrt (115 * 115 + 115 * 115)
-                        origin =
-                            ( 0, 0 )
-
-                        dayApex =
-                            ( 0, -l )
-
-                        nightApex =
-                            ( 0, l )
-
-                        sunriseApex =
-                            fromPolar ( l, ti.sunrisePos )
-
-                        sunsetApex =
-                            fromPolar ( l, ti.sunsetPos )
-
-                        daylight =
-                            polygon [ origin, sunriseApex, dayApex, sunsetApex ]
-                                |> filled (uniform yellow)
-
-                        night =
-                            polygon [ origin, sunriseApex, nightApex, sunsetApex ]
-                                |> filled (uniform blue)
-
-                        --background =
-                        --    circle 85
-                        --        |> styled
-                        --            ( uniform white
-                        --            , solid 1 (uniform darkCharcoal)
-                        --            )
-                        outerTransparentRim =
-                            circle (116 + 35)
-                                |> outlined (solid 70 (uniform white))
-
-                        background =
-                            circle 115
-                                |> styled
-                                    ( Collage.transparent
-                                    , solid 1 (uniform darkCharcoal)
-                                    )
-
-                        --List.map
-                        --    (\l ->
-                        --        circle 115
-                        --            |> styled
-                        --                ( Collage.transparent
-                        --                , solid 1 (uniform darkCharcoal)
-                        --                )
-                        --    )
-                    in
-                    group
-                        [ background
-                        , outerTransparentRim
-                        , group [ daylight, night ]
-                            |> opacity 0.6
-                        ]
 
                 delims hourArc symbols =
                     List.map
