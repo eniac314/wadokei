@@ -638,7 +638,7 @@ clockface model =
                 dayNightBackground =
                     let
                         l =
-                            225
+                            250
 
                         origin =
                             ( 0, 0 )
