@@ -16,6 +16,7 @@ import Element.Events as Events
 import Element.Font as Font
 import Element.Input as Input
 import Html exposing (select)
+import Html.Attributes as HtmlAttr
 import Http exposing (..)
 import Iso8601 exposing (..)
 import Json.Decode as D
@@ -47,6 +48,9 @@ type alias Model =
     , waitingForSunInfo : Bool
     , adjusted : Bool
     , halfHourOffset : Bool
+    , fullScreen : Bool
+    , width : Int
+    , height : Int
     }
 
 
@@ -86,7 +90,7 @@ subscriptions model =
         ]
 
 
-init : { currentTime : Int } -> ( Model, Cmd Msg )
+init : { currentTime : Int, width : Int, height : Int } -> ( Model, Cmd Msg )
 init flags =
     ( { currentTime = millisToPosix flags.currentTime
       , sunInfo = Nothing
@@ -101,7 +105,10 @@ init flags =
       , sunInfoCache = Dict.empty
       , waitingForSunInfo = False
       , adjusted = False
-      , halfHourOffset = False
+      , halfHourOffset = True
+      , fullScreen = flags.width < 500
+      , width = flags.width
+      , height = flags.height
       }
     , Cmd.batch
         [ Task.perform SetZone Time.here
@@ -349,16 +356,23 @@ view model =
     , body =
         [ layout []
             (row
-                [ Element.height fill ]
+                [ Element.height fill, Element.width fill ]
                 [ column
-                    [ Element.width fill
-                    , Element.height fill
+                    [ Element.height fill
                     , spacing 15
                     ]
                     [ clockface model
-                    , timeInfoView model
+                    , if model.fullScreen then
+                        Element.none
+
+                      else
+                        timeInfoView model
                     ]
-                , controlPanelView model
+                , if model.fullScreen then
+                    Element.none
+
+                  else
+                    controlPanelView model
                 ]
             )
         ]
@@ -490,7 +504,11 @@ controlPanelView model =
             column
                 [ padding 20
                 , alignTop
+
+                --, alignLeft
                 , spacing 15
+
+                --, Background.color (Element.rgb255 1 0 0)
                 ]
                 [ row
                     [ spacing 15 ]
@@ -635,6 +653,10 @@ clockface model =
                 ti =
                     computeTimeInfo zone time sunrise_ sunset_
 
+                backgroundPic =
+                    Collage.image ( 143, 143 ) ("images/" ++ (String.fromFloat <| ti.temporalTime.temporalHour + 1) ++ ".png")
+
+                --|> opacity 0.8
                 dayNightBackground =
                     let
                         l =
@@ -657,15 +679,19 @@ clockface model =
 
                         daylight =
                             polygon [ origin, sunriseApex, dayApex, sunsetApex ]
-                                |> filled (uniform yellow)
+                                |> filled (uniform lightYellow)
 
                         night =
                             polygon [ origin, sunriseApex, nightApex, sunsetApex ]
-                                |> filled (uniform blue)
+                                |> filled (uniform lightBlue)
 
                         outerTransparentRim =
-                            circle (116 + 35)
-                                |> outlined (solid 70 (uniform white))
+                            circle (115 + 35)
+                                |> outlined (solid 70 (uniform black))
+
+                        innerWhiteRim =
+                            circle 115
+                                |> filled (uniform white)
 
                         background =
                             circle 115
@@ -675,10 +701,12 @@ clockface model =
                                     )
                     in
                     group
-                        [ background
+                        [ --innerWhiteRim
+                          background
                         , outerTransparentRim
                         , group [ daylight, night ]
-                            |> opacity 0.6
+
+                        --|> opacity 0.6
                         ]
 
                 outerRim =
@@ -688,27 +716,34 @@ clockface model =
                             , solid 1 (uniform darkCharcoal)
                             )
 
-                innerRim =
+                centerRim =
                     circle 68
                         |> styled
                             ( uniform lightGrey
                             , solid 1 (uniform darkCharcoal)
                             )
 
+                innerRim =
+                    circle 72
+                        |> styled
+                            ( uniform lightGrey
+                            , solid 1 (uniform darkCharcoal)
+                            )
+
                 middleRim =
-                    circle 85
+                    circle 90
                         |> styled
                             ( uniform white
                             , solid 1 (uniform darkCharcoal)
                             )
 
                 daySymbols =
-                    [ ( "卯", "六" )
-                    , ( "辰", "五" )
-                    , ( "巳", "四" )
-                    , ( "午", "九" )
-                    , ( "未", "八" )
-                    , ( "申", "七" )
+                    [ ( "卯", "陸" )
+                    , ( "辰", "伍" )
+                    , ( "巳", "肆" )
+                    , ( "午", "玖" )
+                    , ( "未", "捌" )
+                    , ( "申", "漆" )
                     ]
                         |> List.foldl
                             (\d ( done, acc ) ->
@@ -716,7 +751,7 @@ clockface model =
                                 , acc - ti.dayHourArc
                                 )
                             )
-                            ( [], ti.sunrisePos + 2 * pi )
+                            ( [], ti.sunrisePos )
                         |> Tuple.first
                         |> List.map
                             (\( s, angle ) ->
@@ -730,12 +765,12 @@ clockface model =
                             )
 
                 nightSymbols =
-                    [ ( "酉", "六" )
-                    , ( "戌", "五" )
-                    , ( "亥", "四" )
-                    , ( "子", "九" )
-                    , ( "丑", "八" )
-                    , ( "寅", "七" )
+                    [ ( "酉", "陸" )
+                    , ( "戌", "伍" )
+                    , ( "亥", "肆" )
+                    , ( "子", "玖" )
+                    , ( "丑", "捌" )
+                    , ( "寅", "漆" )
                     ]
                         |> List.foldl
                             (\d ( done, acc ) ->
@@ -743,7 +778,53 @@ clockface model =
                                 , acc - ti.nightHourArc
                                 )
                             )
-                            ( [], ti.sunsetPos + 2 * pi )
+                            ( [], ti.sunsetPos )
+                        |> Tuple.first
+                        |> List.map
+                            (\( s, angle ) ->
+                                ( s
+                                , if model.adjusted then
+                                    angle - ti.nightHourArc / 2
+
+                                  else
+                                    angle
+                                )
+                            )
+
+                dayQuartersSymbols =
+                    [ "初", "壱", "弐", "参" ]
+                        |> List.repeat 6
+                        |> List.concat
+                        |> List.foldl
+                            (\d ( done, acc ) ->
+                                ( ( d, acc ) :: done
+                                , acc - (ti.dayHourArc / 4)
+                                )
+                            )
+                            ( [], ti.sunrisePos )
+                        |> Tuple.first
+                        |> List.map
+                            (\( s, angle ) ->
+                                ( s
+                                , if model.adjusted then
+                                    angle - ti.dayHourArc / 2
+
+                                  else
+                                    angle
+                                )
+                            )
+
+                nightQuartersSymbols =
+                    [ "初", "壱", "弐", "参" ]
+                        |> List.repeat 6
+                        |> List.concat
+                        |> List.foldl
+                            (\d ( done, acc ) ->
+                                ( ( d, acc ) :: done
+                                , acc - (ti.nightHourArc / 4)
+                                )
+                            )
+                            ( [], ti.sunsetPos )
                         |> Tuple.first
                         |> List.map
                             (\( s, angle ) ->
@@ -761,7 +842,7 @@ clockface model =
                         (\( _, angle ) ->
                             let
                                 ( x1, y1 ) =
-                                    fromPolar ( 68, angle - hourArc / 2 )
+                                    fromPolar ( 72, angle - hourArc / 2 )
 
                                 ( x2, y2 ) =
                                     fromPolar ( 115, angle - hourArc / 2 )
@@ -772,10 +853,26 @@ clockface model =
                         |> List.map (\( a, b ) -> segment a b)
                         |> List.map (traced (solid 1 (uniform black)))
 
+                quarterView ( s, angle ) =
+                    let
+                        ( x, y ) =
+                            fromPolar ( 72, angle )
+
+                        sView =
+                            Text.fromString s
+                                |> Text.color black
+                                |> Text.size 7
+                                |> rendered
+                                |> shiftX x
+                                |> shiftY y
+                                |> Collage.rotate (angle - pi / 2)
+                    in
+                    [ sView ]
+
                 symbolView isDay ( ( sign, number ), angle ) =
                     let
                         ( x, y ) =
-                            fromPolar ( 97.5, angle )
+                            fromPolar ( 100, angle )
 
                         sView =
                             Text.fromString sign
@@ -795,7 +892,7 @@ clockface model =
                                 |> Collage.rotate (angle - pi / 2)
 
                         ( u, v ) =
-                            fromPolar ( 75.5, angle )
+                            fromPolar ( 79.5, angle )
 
                         nView =
                             Text.fromString number
@@ -816,7 +913,7 @@ clockface model =
                     currentSekki today
                         |> Text.fromString
                         |> Text.color black
-                        |> Text.size 22
+                        |> Text.size 20
                         |> rendered
                         |> shiftY 30
 
@@ -824,7 +921,6 @@ clockface model =
                     (String.padLeft 2
                         '0'
                         (String.fromInt <| Date.monthNumber today)
-                        ++ "月"
                         ++ String.padLeft 2
                             '0'
                             (String.fromInt <| Date.day today)
@@ -832,9 +928,15 @@ clockface model =
                     )
                         |> Text.fromString
                         |> Text.color black
-                        |> Text.size 20
+                        |> Text.size 18
                         |> rendered
                         |> shiftY -30
+
+                dateStr =
+                    (numberToJapanese <| Date.monthNumber today)
+                        ++ "月"
+                        ++ (numberToJapanese <| Date.day today)
+                        ++ "日"
             in
             (stack <|
                 [ circle 4
@@ -845,14 +947,16 @@ clockface model =
 
                 --, hand darkBlue 2 114 ti.sunrisePos
                 --, hand darkBlue 2 114 ti.sunsetPos
-                , sekkiView
-                , dateView
+                --, sekkiView
+                --, dateView
                 ]
                     ++ List.concatMap (symbolView True) daySymbols
                     ++ List.concatMap (symbolView False) nightSymbols
+                    --++ List.concatMap quarterView dayQuartersSymbols
                     ++ delims ti.dayHourArc daySymbols
                     ++ delims ti.nightHourArc nightSymbols
-                    ++ [ innerRim
+                    ++ [ backgroundPic
+                       , innerRim
                        , middleRim
                        , if model.adjusted then
                             outerRim
@@ -861,14 +965,68 @@ clockface model =
                             dayNightBackground
                        ]
             )
-                |> svgBox ( 235, 235 )
+                |> (\c ->
+                        if model.fullScreen then
+                            Collage.shift ( 117.5, -117.5 ) c
+                                |> svgExplicit
+                                    [ HtmlAttr.style "width" (String.fromInt (model.height - 20) ++ "px")
+                                    , HtmlAttr.style "height" (String.fromInt (model.height - 20) ++ "px")
+                                    , HtmlAttr.attribute "viewBox" "0 0 235 235"
+                                    ]
+
+                        else
+                            svgBox ( 235, 235 ) c
+                   )
                 |> (\x ->
-                        el
-                            [ padding 20
-                            , Element.width (px 270)
-                            , Element.height (px 270)
+                        row
+                            [ Background.color
+                                (Element.rgb255 0 0 0)
+                            , paddingXY 15 5
+                            , if model.fullScreen then
+                                Element.height (px <| model.height)
+
+                              else
+                                Element.height (px 270)
                             ]
-                            (Element.html x)
+                            [ el
+                                [ if model.fullScreen then
+                                    Element.width (px <| model.width - 100)
+
+                                  else
+                                    Element.width (px 270)
+                                , centerY
+                                ]
+                                (el
+                                    [ centerY
+                                    ]
+                                    (Element.html x)
+                                )
+                            , --if model.fullScreen then
+                              row
+                                [ Font.color (Element.rgb255 255 255 255)
+                                , Font.size 24
+                                , spacing 15
+                                , Element.width (px 70)
+                                , centerX
+                                ]
+                                [ el
+                                    [ htmlAttribute (HtmlAttr.style "writing-mode" "vertical-rl")
+                                    ]
+                                    (text <| timeInfoToStr ti)
+                                , column
+                                    [ spacing 15
+                                    ]
+                                    [ el
+                                        [ htmlAttribute (HtmlAttr.style "writing-mode" "vertical-rl")
+                                        ]
+                                        (text <| currentSekki today)
+                                    , el
+                                        [ htmlAttribute (HtmlAttr.style "writing-mode" "vertical-rl")
+                                        ]
+                                        (text dateStr)
+                                    ]
+                                ]
+                            ]
                    )
 
         _ ->
@@ -964,6 +1122,144 @@ sekki year =
                 )
             )
         |> Dict.fromList
+
+
+numberToJapanese n =
+    case n of
+        0 ->
+            "零"
+
+        1 ->
+            "壱"
+
+        2 ->
+            "弐"
+
+        3 ->
+            "参"
+
+        4 ->
+            "肆"
+
+        5 ->
+            "伍"
+
+        6 ->
+            "陸"
+
+        7 ->
+            "漆"
+
+        8 ->
+            "捌"
+
+        9 ->
+            "玖"
+
+        10 ->
+            "拾"
+
+        11 ->
+            "拾壱"
+
+        12 ->
+            "拾弐"
+
+        13 ->
+            "拾参"
+
+        14 ->
+            "拾肆"
+
+        15 ->
+            "拾伍"
+
+        16 ->
+            "拾陸"
+
+        17 ->
+            "拾漆"
+
+        18 ->
+            "拾捌"
+
+        19 ->
+            "拾玖"
+
+        20 ->
+            "弐拾"
+
+        21 ->
+            "弐拾壱"
+
+        22 ->
+            "弐拾弐"
+
+        23 ->
+            "弐拾参"
+
+        24 ->
+            "弐拾肆"
+
+        25 ->
+            "弐拾伍"
+
+        26 ->
+            "弐拾陸"
+
+        27 ->
+            "弐拾漆"
+
+        28 ->
+            "弐拾捌"
+
+        29 ->
+            "弐拾玖"
+
+        30 ->
+            "参拾"
+
+        31 ->
+            "参拾壱"
+
+        _ ->
+            ""
+
+
+timeInfoToStr ti =
+    let
+        hourNames =
+            Dict.fromList
+                [ ( 0, "深夜玖つ" )
+                , ( 1, "夜捌つ" )
+                , ( 2, "暁漆つ" )
+                , ( 3, "明陸つ" )
+                , ( 4, "朝伍つ" )
+                , ( 5, "昼肆つ" )
+                , ( 6, "真昼玖つ" )
+                , ( 7, "昼捌つ" )
+                , ( 8, "夕漆つ" )
+                , ( 9, "暮陸つ" )
+                , ( 10, "宵伍つ" )
+                , ( 11, "夜肆つ" )
+                ]
+
+        minutesName =
+            if ti.temporalTime.temporalMinute < 15 then
+                "初刻"
+
+            else if ti.temporalTime.temporalMinute < 30 then
+                "壱刻"
+
+            else if ti.temporalTime.temporalMinute < 45 then
+                "弐刻"
+
+            else
+                "参刻"
+    in
+    Dict.get ti.temporalTime.temporalHour hourNames
+        |> Maybe.withDefault ""
+        |> (\s -> s ++ " " ++ minutesName)
 
 
 type alias TimeInfo =
