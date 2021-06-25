@@ -660,7 +660,7 @@ clockface model =
                 dayNightBackground =
                     let
                         l =
-                            250
+                            275
 
                         origin =
                             ( 0, 0 )
@@ -1249,13 +1249,13 @@ timeInfoToStr ti =
                 "初刻"
 
             else if ti.temporalTime.temporalMinute < 30 then
-                "壱刻"
-
-            else if ti.temporalTime.temporalMinute < 45 then
                 "弐刻"
 
-            else
+            else if ti.temporalTime.temporalMinute < 45 then
                 "参刻"
+
+            else
+                "肆刻"
     in
     Dict.get ti.temporalTime.temporalHour hourNames
         |> Maybe.withDefault ""
